@@ -119,11 +119,17 @@ const vdomButton = () => {
 由创建的对象结构可知，React.createElement() 可简单处理为：
 ```javascript
 const React = {
-    createElement: (type, props, children) => {
-        props.children = children
+    createElement: (type, props, ...children) => {
+        // 注意没有 props 和 children 时的兼容
+        let newProps = Object.assign({}, props)
+        if (children.length === 0) {
+            newProps.children = []
+        } else {
+            newProps.children = children
+        }
         let obj = {
             type,
-            props
+            props: newProps
         }
         return obj
     }
@@ -160,11 +166,12 @@ const ReactDOM = {
                 }
             } else {
                 // 4. 添加其他属性
-                element.setAttribute(k, props[k])
+                element[k] = props[k]
             }
         }
         // 5. 将元素添加到页面容器中
         container.appendChild(element)
+        return element
     }
 }
 ```
@@ -210,4 +217,268 @@ React.createElement("div", {
 ```javascript
 React.createElement(App, null)
 ```
-可见与普通标签相比，自定义标签的 JSX 没有双引号。那么如何对自定义标签的 JSX 进行解析呢？
+可见与普通标签相比，自定义标签的 JSX 没有双引号。那么如何对自定义标签的 JSX 进行解析呢？App 的写法一般如下：
+```javascript
+class App extends React.Component {
+    render(props) {
+        return (
+            <button id="id-button-like">Like</button>
+        )
+    }
+}
+```
+App 类继承自 React.Component，说明它是 React.Component 的子类。如何判断一个类是另一个的子类呢？用 instanceof。因此可以定义 isClass() 方法判断一个类是否是 React.Component 的子类。
+```javascript
+const isClass = function(o) {
+    return o.prototype instanceof React.Component
+}
+// 定义 Component 类
+class Component {
+    constructor(props) {
+        this.props = props
+    }
+}
+// 将 Component 类添加到 React 中
+let React = {
+    createElement: (type, props, ...children) => {
+        // ...
+    },
+    Component: Component
+}
+```
+此时在 ReactDOM.render() 方法中，除了对文本节点和普通节点的判断之外，还要增加对自定义标签的判断。
+```javascript
+const ReactDOM = {
+    render: (vdom, container) => {
+        let type = vdom.type
+        let props = vdom.props || []
+        let children = props && props.children || []
+        let element = null
+        // 1.创建元素：文本节点和普通节点需用不同方式创建
+        if (type === 'text') {
+            element = document.createTextNode(vdom.props.nodeValue)
+        } else if (isClass(type)) {
+            // type 可能是 Component 类的子类
+            let instance = new type(props)
+            let r = instance.render()
+            // 按照上述 App 类的定义，r 返回的结果是 <button id="id-button-like">Like</button>
+            // 在开发环境中，babel 会自动把上面转成下面这段
+            /*
+                React.createElement("button", {
+                    id: "id-button-like"
+                }, "Like")
+            */
+            element = ReactDOM.render(r, container)
+        } else {
+            element = document.createElement(type)
+        }
+        // ...
+    }
+}
+```
+因为只有浏览器环境能使用 document API，而此时浏览器又不支持 JSX，所以需要用 webpack 搭建开发环境，用 loader 把 JSX 转译成浏览器能识别的函数调用语法。
+先安装 webpack 和 webpack-cli
+> npm install webpack webpack-cli
+新建 webpack.config.js 文件，写入内容：
+```javascript
+const path = require('path')
+
+module.exports = {
+    entry: './src/index.js',
+    output: {
+        filename: 'bundle.js',
+        path: path.resolve(__dirname, 'build'),
+    },
+    module: {
+        rules: [
+            {
+                test: /\.js$/, // 匹配 .js 和 .jsx 文件,
+                use: {
+                    loader: 'babel-loader',
+                }
+            }
+        ]
+    },
+    mode: 'development',
+    watch: true, // 加上监听，不需要手动刷新
+}
+```
+转译需要用到 babel-loader，安装一下。
+> npm install babel-loader
+在 babel.config.js 文件中写入内容：
+```javascript
+module.exports = {
+    presets: ['@babel/preset-react']
+}
+```
+在 package.json 文件中加入指令，便于打包运行。
+```json
+    "scripts": {
+        "build": "webpack"
+    }
+```
+此时程序能正常运行，但是当解析到文本节点时会报错。原因是当 children 是文本时，要单独创建文本节点。需要改写一下 createElement() 方法。
+```javascript
+// 判断是否对象
+const isObject = (o) => {
+    return Object.prototype.toString.call(o) === '[object Object]'
+}
+
+// 创建文本节点
+const createTextElement = (text) => {
+    let type = 'text'
+    let props = {
+        nodeValue: text
+    }
+    // 改写结构之后再次调用 createElement()
+    let e = createElement(type, props)
+    return e
+}
+
+const React = {
+    createElement: (type, props, ...children) => {
+        // 注意没有 props 和 children 时的兼容
+        let newProps = Object.assign({}, props)
+        if (children.length === 0) {
+            newProps.children = []
+        } else {
+            let l = []
+            // children 兼容处理，区分对象和文本节点
+            for (let c of children) {
+                if (isObject(c)) {
+                    l.push(c)
+                } else {
+                    let t = createTextElement(c)
+                    l.push(t)
+                }
+            }
+            newProps.children = l
+        }
+        let obj = {
+            type,
+            props: newProps
+        }
+        return obj
+    }
+}
+```
+现在给元素绑定点击事件。
+```javascript
+class App extends React.Component {
+    actionClick() {
+        log('click')
+    }
+    render(props) {
+        return (
+            <button id="id-button-like" onClick={this.actionClick}>Like</button>
+        )
+    }
+}
+```
+至此，我们已经实现了添加元素并绑定事件。接下来处理数据变化时自动更新元素。
+假设要实现能加减数字的按钮组合。
+```javascript
+class App extends React.Component {
+    constructor(props) {
+        super(props)
+        this.state = {
+            count: 0
+        }
+    }
+    actionAdd = () => {
+        let count = this.state.count
+        this.setState({
+            count: count + 1,
+        })
+    }
+    actionMinus = () => {
+        let count = this.state.count
+        this.setState({
+            count: count - 1,
+        })
+    }
+    render(state, props) {
+        return (
+            <div>
+                <button onClick={this.actionAdd}>
+                    +
+                </button>
+                <span style="margin: 10px">
+                    { state.count }
+                </span>
+                <button onClick={this.actionMinus}>
+                    -
+                </button>
+            </div>
+        )
+    }
+}
+```
+此时需要调用 Component 类的 setState() 方法，实现页面刷新（简易版 React 只实现整个页面刷新，不考虑 Diff 局部刷新情况）。
+```javascript
+// 用全局变量 store 存储所需 vdom 和 element，初始值 null
+let store = {
+    vdom: null,
+    element: null,
+}
+class Component {
+    constructor(props) {
+        this.props = props
+    }
+    setState(state) {
+        // 新建刷新方法 render()
+        render(store.vdom, store.element)
+    }
+}
+const render = (vdom, element) => {
+    // 先用简单粗暴的方法，如果页面有元素的话，把元素清空
+    while (element.hasChildNodes()) {
+        element.removeChild(element.lastChild)
+    }
+    // 然后再调用 ReactDOM.render() 方法添加元素
+    ReactDOM.render(vdom, element)
+}
+```
+由于要把 vdom 和 element 存储到 store 中，在调用 ReactDOM.render() 时就要做判断，将变量存起来。
+```javascript
+const ReactDOM = {
+    render: (vdom, container) => {
+        // 全局变量存的一直是最初的值
+        if (store.vdom === null) {
+            store.vdom = vdom
+        }
+        if (store.element === null) {
+            store.element = container
+        }
+        // ...
+    }
+}
+```
+此时想要改变 state 的值，需要改写 ReactDOM.render() 方法，需要用单例来模拟全局变量，而不能每次都创建新的 instance。
+```javascript
+const ReactDOM = {
+    render: (vdom, container) => {
+        let type = vdom.type
+        let props = vdom.props || []
+        let children = props && props.children || []
+        let element = null
+        // 1.创建元素：文本节点和普通节点需用不同方式创建
+        if (type === 'text') {
+            element = document.createTextNode(vdom.props.nodeValue)
+        } else if (isClass(type)) {
+            // type 可能是 Component 类的子类
+            let cls = type
+            if (cls.instance === undefined) {
+                cls.instance = new cls(props)
+            }
+            let instance = cls.instance
+            // 改变 state 的值
+            let state = instance.state
+            let r = instance.render(state, props)
+            element =  ReactDOM.render(r, container)
+        } ...
+    }
+}
+``` 
+至此，我们便实现了简易版 React，可以解析 JSX 模版，创建 DOM 元素并添加到 html 页面中，添加点击事件，state 数据发生变化时刷新视图。
+![button](https://raw.githubusercontent.com/jannahuang/blog/main/pictures/add-button.png)
