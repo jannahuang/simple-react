@@ -481,4 +481,4 @@ const ReactDOM = {
 }
 ``` 
 至此，我们便实现了简易版 React，可以解析 JSX 模版，创建 DOM 元素并添加到 html 页面中，添加点击事件，state 数据发生变化时刷新视图。
-![button](https://raw.githubusercontent.com/jannahuang/blog/main/pictures/add-button.png)
+![button](https://raw.githubusercontent.com/jannahuang/blog/main/pictures/add-button.gif)
